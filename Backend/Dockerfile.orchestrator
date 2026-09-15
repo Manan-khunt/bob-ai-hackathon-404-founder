@@ -1,0 +1,16 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY common/ common/
+COPY orchestrator/ orchestrator/
+
+ENV PYTHONPATH=/app
+ENV IMMUNE_DB_PATH=/app/data/immune_memory.db
+
+EXPOSE 8000
+
+CMD ["uvicorn", "orchestrator.app:app", "--host", "0.0.0.0", "--port", "8000"]

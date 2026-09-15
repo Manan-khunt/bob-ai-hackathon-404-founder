@@ -1,0 +1,70 @@
+schemaversion: 1.0
+event: "IBM BoB AI Innovation Hackathon 2026"
+team:
+  name: "404 Founder"
+  members:
+    - "Manan"
+    - "Jugal"
+    - "Arpit"
+project:
+  name: "IMMUNE-NET"
+  tagline: "Self-Healing Network Security Inspired by Biological Immunity"
+  problem: >-
+    Current cybersecurity tools are reactive-detective: they detect threats and alert humans,
+    who respond manually. Nobody autonomously detects, contains, adapts and remembers the way
+    a biological immune system fights infection.
+  solution: >-
+    A decentralized AI agent swarm that mimics immune response end-to-end: streaming
+    telemetry observation, adaptive threat correlation, autonomous quarantine, cryptographically
+    signed digital antibody synthesis, lymphatic WebSocket broadcast, sub-2ms memory
+    neutralization, and SQLite immune memory persistence.
+  techstack:
+    - Python 3.12
+    - FastAPI + Uvicorn
+    - Python WebSockets (Broadcast Hub)
+    - SQLite
+    - scikit-learn Isolation Forest
+    - React 19 + Vite 8
+    - Tailwind CSS v4
+    - IBM watsonx.x (MCP tool server connectivity)
+  key_features:
+    - "MITRE ATT&CK kill-chain mapping per confirmed threat"
+    - "APT threat-actor fingerprinting (top-3 cosine-similarity attribution vs APT41, FIN7, Lazarus, Cozy Bear, Scattered Spider)"
+    - "Blast-radius lateral-movement prediction with pre-emptive auto-quarantine (< 15s fall-time peers)"
+    - "Honeypot decoy node (node-decoy) capture log + decoy antibody synthesis"
+    - "Antibody half-life decay scoring with 60-min background re-vaccination sweep"
+    - "IBM watsonx Bob MCP tool server over JSON-RPC 2.0 (8 tools: fleet status, node detail, quarantine, release, incidents, antibody library, blast radius, run simulation)"
+  ai_agentic_capabilities:
+    - "MITRE ATT&CK kill-chain signal map per confirmed threat"
+    - "APT threat-actor fingerprinting (cosine similarity vs APT41, FIN7, Lazarus, Cozy Bear, Scattered Spider)"
+    - "Blast-radius propagation prediction with pre-emptive auto-quarantine (< 15s latency peers)"
+    - "Honeypot decoy node (node-decoy) with capture log + decoy antibody synthesis"
+    - "Antibody half-life decay scoring with background re-vaccination sweep"
+    - "IBM watsonx MCP tool server over JSON-RPC 2.0 (8 tools + async simulation)"
+  ai_capability_endpoints:
+    - "GET /api/apt-fingerprint/{incident_id}"
+    - "GET /api/blast-radius/{node_id}"
+    - "GET /api/antibodies/expiring"
+    - "GET /api/honeypot/events"
+    - "POST /api/honeypot/attack"
+    - "GET /api/stats"
+    - "GET /mcp | POST /mcp"
+  frontend_components:
+    - "StatBar"
+    - "NodeMesh + NodeDetailPanel (quarantine / release)"
+    - "BlastRadiusMap"
+    - "MitrePanel"
+    - "AptFingerprint"
+    - "BlufFeed"
+    - "AntibodyLibrary"
+    - "HoneypotLog"
+    - "BobChat (MCP console)"
+    - "Timeline"
+  run:
+    backend: "cd bob-ai-hackathon-404-founder-Backend && python -m pip install -r requirements.txt && python run_simulation.py"
+    frontend: "cd bob-ai-hackathon-404-founder-Frontend && npm install && npm run dev"
+  verify: "cd bob-ai-hackathon-404-founder-Backend && python acceptance_test.py"
+  docs:
+    architecture: "bob-ai-hackathon-404-founder-Backend/docs/architecture.md"
+    mcp_integration: "bob-ai-hackathon-404-founder-Backend/docs/bob-integration.md"
+    demo_runbook: "bob-ai-hackathon-404-founder-Backend/docs/DEMO_RUNBOOK.md"

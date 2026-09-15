@@ -1,0 +1,147 @@
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: immune-orchestrator
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - IMMUNE_DB_PATH=/app/data/immune_memory.db
+    volumes:
+      - immune_data:/app/data
+    networks:
+      - immune_net
+
+  agent-alpha:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-alpha
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-alpha
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-beta:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-beta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-beta
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-gamma:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-gamma
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-gamma
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-delta:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-delta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-delta
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-epsilon:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-epsilon
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-epsilon
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-zeta:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-zeta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-zeta
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-eta:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-eta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-eta
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  agent-theta:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: immune-agent-theta
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ID=node-theta
+      - ORCHESTRATOR_URL=ws://orchestrator:8000/ws
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+  attacker:
+    build:
+      context: .
+      dockerfile: Dockerfile.attacker
+    container_name: immune-attacker
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ORCHESTRATOR_URL=http://orchestrator:8000
+    depends_on:
+      - orchestrator
+    networks:
+      - immune_net
+
+volumes:
+  immune_data:
+
+networks:
+  immune_net:
+    driver: bridge

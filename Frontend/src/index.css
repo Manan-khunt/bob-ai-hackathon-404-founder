@@ -1,0 +1,116 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: #080c08;
+    color: #c8fad6;
+    font-family: 'Share Tech Mono', monospace;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  /* Scanline CRT overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 255, 65, 0.015) 0px,
+      rgba(0, 255, 65, 0.015) 2px,
+      transparent 2px,
+      transparent 4px
+    );
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  .font-orbitron {
+    font-family: 'Orbitron', sans-serif;
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #080c08;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #004d18;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00c032;
+  }
+
+  ::selection {
+    background: #00ff41;
+    color: #080c08;
+  }
+}
+
+@layer components {
+  /* Terminal cursor */
+  .cursor::after {
+    content: '_';
+    animation: blink 1s step-end infinite;
+  }
+
+  /* Panel shell */
+  .hacker-panel {
+    @apply bg-hacker-panel border border-hacker-border rounded-hard;
+  }
+
+  .hacker-title {
+    @apply font-orbitron font-bold text-hacker-green uppercase tracking-wider;
+  }
+
+  .label-muted {
+    @apply font-mono text-hacker-muted text-[10px] uppercase tracking-widest;
+  }
+
+  .tech-pill {
+    @apply inline-block px-1.5 py-0.5 rounded-hard border border-hacker-border text-hacker-blue font-mono text-[10px];
+  }
+
+  /* Confidence bars */
+  .conf-bar {
+    @apply h-1 rounded-full bg-hacker-border overflow-hidden;
+  }
+  .conf-bar > span {
+    @apply block h-full rounded-full;
+  }
+  .conf-bar > span.good {
+    @apply bg-hacker-green;
+  }
+  .conf-bar > span.warn {
+    @apply bg-hacker-amber;
+  }
+  .conf-bar > span.bad {
+    @apply bg-hacker-red;
+  }
+
+  /* Node badge */
+  .node-badge {
+    @apply inline-block px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider rounded-hard;
+  }
+}
+
+/* Matrix characters used by canvas */
+@font-face {
+  font-family: 'MatrixGlyph';
+  src: local('Share Tech Mono');
+}

@@ -1,0 +1,24 @@
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime state and generated models
+*.db
+*.sqlite
+*.sqlite3
+**/data/model.joblib
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,1 @@
+"""Attacker compatibility package."""
