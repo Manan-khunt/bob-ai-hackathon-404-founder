@@ -56,6 +56,9 @@ from orchestrator.apt_fingerprint import fingerprint_threat_actor, detected_tech
 from orchestrator.blast_radius import predict_blast_radius
 from orchestrator.honeypot import HoneypotManager
 from orchestrator.bob_mcp import router as mcp_router, set_mcp_context
+from orchestrator.pipeline import ThreatPipeline
+from common.schemas import PipelineIncidentRecord, NormalizedThreatEvent
+from orchestrator.seed_data import seed_store
 
 SCENARIO_ALIAS_MAP: Dict[str, str] = {
     "crypto_ransomware": "cryptominer",
@@ -94,6 +97,9 @@ phase_model = None
 
 # Decoy honeypot trap manager.
 honeypot = HoneypotManager(db, synthesizer)
+
+# Multi-source threat pipeline (ingest → correlate → triage → prioritize → response).
+threat_pipeline: Optional[ThreatPipeline] = None
 
 # Re-vaccination sweep cadence (60 minutes).
 DECAY_SWEEP_INTERVAL_SECONDS: int = 60 * 60
@@ -219,6 +225,78 @@ async def run_scenario_async(scenario: str) -> Dict[str, Any]:
     return await trigger_demo_attack(req)
 
 
+async def pipeline_immune_response(
+    record: PipelineIncidentRecord,
+    events: List[NormalizedThreatEvent],
+) -> Dict[str, Any]:
+    """
+    Autonomous immune-response layer invoked after TRUE_THREAT pipeline classification.
+    Reuses quarantine, antibody synthesis, and swarm broadcast without replacing legacy paths.
+    """
+    asset_id = events[0].asset_id if events else "node-beta"
+    threat = ConfirmedThreat(
+        threat_id=record.incident_id,
+        classification=f"Pipeline-confirmed {record.scenario_type}",
+        affected_agent=asset_id,
+        peer_agents=NODES_CATALOG.get(asset_id, {}).get("peers", []),
+        confidence_score=record.confidence_score,
+        evidence_event_ids=record.correlated_event_ids,
+        detection_model_or_rule_version=record.rule_version,
+        correlation_id=record.correlation_id,
+        scenario_type=record.scenario_type,
+        narrative=record.classification_reason,
+        biomarkers=events[-1].evidence if events else {},
+        mitre={k: str(v) for k, v in record.mitre.items() if k in ("technique_id", "technique_name", "tactic")},
+        bluf_summary=record.bluf.get("full_summary") if record.bluf else None,
+    )
+    db.save_threat(threat)
+
+    cmd = QuarantineCommand(
+        agent_id=asset_id,
+        threat_id=threat.threat_id,
+        action="quarantine",
+        reason=f"Pipeline TRUE_THREAT: {record.classification_reason}",
+    )
+    cmd.signature = sign_payload(cmd.model_dump())
+    await broadcaster.send_quarantine_command(cmd)
+    quarantine_manager.fence(asset_id, reason="Pipeline autonomous containment")
+
+    if asset_id in node_states:
+        node_states[asset_id].status = "quarantined"
+        node_states[asset_id].active_threat = threat.classification
+
+    existing_abs = [a for a in db.get_all_antibodies(status="active") if a.threat_type == threat.scenario_type]
+    if existing_abs:
+        antibody = existing_abs[0]
+    else:
+        antibody = synthesizer.synthesize(threat)
+        db.save_antibody(antibody)
+
+    delivery = await broadcaster.broadcast_antibody(antibody)
+    blast_chain = predict_blast_radius(asset_id, events[-1].evidence if events else {})
+
+    return {
+        "containment": {
+            "status": "quarantine_issued",
+            "command_id": cmd.command_id,
+            "agent_id": asset_id,
+        },
+        "antibody": antibody.model_dump(mode="json"),
+        "delivery_status": delivery,
+        "blast_radius": blast_chain,
+    }
+
+
+def _init_threat_pipeline() -> ThreatPipeline:
+    global threat_pipeline
+    threat_pipeline = ThreatPipeline(
+        correlator=correlator,
+        database=db,
+        response_handler=pipeline_immune_response,
+    )
+    return threat_pipeline
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager handling startup rehydration and graceful shutdown."""
@@ -226,12 +304,14 @@ async def lifespan(app: FastAPI):
     active_abs = db.get_all_antibodies(status="active")
     if settings.model_path.exists():
         phase_model = load_model(settings.model_path)
+    pipeline = _init_threat_pipeline()
     set_mcp_context({
         "node_states": node_states,
         "db": db,
         "phase_memory": phase_memory,
         "quarantine_manager": quarantine_manager,
         "run_scenario_async": run_scenario_async,
+        "threat_pipeline": pipeline,
     })
     refresh_decay_statuses()
     decay_task = asyncio.create_task(antibody_decay_sweep())
@@ -269,6 +349,7 @@ TAGS_METADATA = [
     {"name": "Alerts", "description": "Administrative security alerts, acknowledgement, and escalation."},
     {"name": "Fleet & Nodes", "description": "Real-time posture and status of all swarm endpoint nodes."},
     {"name": "Demonstration & Simulation", "description": "Interactive attack injection, repeat-attack tests, and memory reset."},
+    {"name": "Threat Pipeline", "description": "Multi-source ingest, normalization, correlation, triage, prioritization, and BLUF."},
 ]
 
 app = FastAPI(
@@ -567,23 +648,42 @@ async def manual_unfence(agent_id: str = Path(..., description="Target node to r
 @app.get(
     "/incidents",
     tags=["Incidents"],
-    summary="List Confirmed Incident Records",
-    description="Retrieve list of all confirmed security incidents with MITRE ATT&CK technique mapping and BLUF summaries.",
+    summary="List Prioritized Incidents",
+    description="Returns all incidents sorted by priority for the frontend.",
 )
 async def get_phase_incidents() -> List[Dict[str, Any]]:
-    """Retrieve all confirmed incident records."""
-    return phase_memory.list_incidents()
+    """Return prioritized incidents for the frontend."""
+    return seed_store.incidents
+
+
+@app.get(
+    "/api/incidents/{incident_id}",
+    tags=["Incidents"],
+    summary="Get Incident Detail",
+    description="Returns full detail for a single incident including BLUF and timeline.",
+)
+async def get_incident_detail(incident_id: str = Path(...)) -> Dict[str, Any]:
+    """Return single incident detail for the frontend investigation view."""
+    for inc in seed_store.incidents:
+        if inc["id"] == incident_id:
+            return inc
+    # Also check phase memory for pipeline-generated incidents
+    pipeline_incidents = phase_memory.list_incidents()
+    for inc in pipeline_incidents:
+        if inc.get("incident_id") == incident_id:
+            return inc
+    raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
 
 
 @app.get(
     "/alerts",
     tags=["Alerts"],
-    summary="List Administrative Alerts",
-    description="Retrieve all administrative notifications dispatched to node owners, including escalation status.",
+    summary="List Alert Feed",
+    description="Returns all alerts matching the frontend alert feed format.",
 )
 async def get_alerts() -> List[Dict[str, Any]]:
-    """Retrieve all administrative alerts."""
-    return phase_memory.list_alerts()
+    """Return alert feed for the frontend."""
+    return seed_store.alerts
 
 
 @app.post(
@@ -1054,36 +1154,23 @@ async def trigger_honeypot_attack(req: HoneypotAttackRequest) -> Dict[str, Any]:
 @app.get(
     "/api/stats",
     tags=["System & Health"],
-    summary="Real-Time Fleet & Threat Stats",
-    description="Aggregated metrics for the command bar: fleet immunity %, active threats, antibodies synthesized today, false positive rate, uptime.",
+    summary="Executive Metrics Dashboard Summary",
+    description="Returns executive-level metrics for the frontend dashboard KPIs.",
 )
 async def get_fleet_stats() -> Dict[str, Any]:
-    """Compute command-bar stats from live node states + immune memory."""
-    nodes = list(node_states.values())
-    protected = [n for n in nodes if n.status in ("immune", "healthy")]
-    immunity_pct = round((len(protected) / max(len(nodes), 1)) * 100, 1) if nodes else 0.0
-    active_threats = [n for n in nodes if n.status == "infected" or (n.active_threat and n.status != "quarantined")]
-    antibodies = db.get_all_antibodies()
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    antibodies_today = 0
-    for a in antibodies:
-        ref = a.synthesized_at.isoformat() if hasattr(a, "synthesized_at") and a.synthesized_at else a.created_at
-        if ref and ref.startswith(today_str):
-            antibodies_today += 1
-    threats = db.get_threats(limit=100)
-    fp_rate = 0.0
-    if threats:
-        false_pos = [t for t in threats if float(t.confidence_score or 0) < 0.85]
-        fp_rate = round((len(false_pos) / len(threats)) * 100, 1)
-    return {
-        "immunity_pct": immunity_pct,
-        "active_threats": len(active_threats),
-        "antibodies_today": antibodies_today,
-        "false_positive_rate": fp_rate,
-        "total_threats_seen": len(threats),
-        "nodes_total": len(nodes),
-        "antibodies_total": len(antibodies),
-    }
+    """Return EXECUTIVE_METRICS-shaped data for the frontend."""
+    return seed_store.metrics
+
+
+@app.get(
+    "/api/sources",
+    tags=["System & Health"],
+    summary="List Intelligence Sources",
+    description="Returns all operational intelligence source feeds with health, latency, and coverage data.",
+)
+async def get_sources() -> List[Dict[str, Any]]:
+    """Return operational sources for the frontend SourcesPage."""
+    return seed_store.sources
 
 
 # ---------------------------------------------------------
@@ -1111,6 +1198,59 @@ class AttackRequest(BaseModel):
             }
         }
     }
+
+
+class ThreatScenarioRequest(BaseModel):
+    scenario: str = Field(
+        ...,
+        description="Demo scenario: coordinated_intrusion, benign_noise, or needs_review",
+    )
+
+
+@app.post(
+    "/api/ingest/events",
+    tags=["Threat Pipeline"],
+    summary="Ingest multi-source threat events",
+    description="""
+Unified ingestion for SIEM, sensors, honeypot, endpoint, and intelligence feeds.
+Accepts a single event, a list of events, or `{ \"events\": [...] }`.
+Events are normalized, correlated, triaged, prioritized, and mapped to MITRE ATT&CK.
+Synthetic demo payloads are flagged via `demo_synthetic`.
+""",
+)
+async def ingest_threat_events(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    pipeline = threat_pipeline or _init_threat_pipeline()
+    auto = bool(body.get("auto_respond", False))
+    return await pipeline.ingest_and_process(body, auto_respond=auto)
+
+
+@app.post(
+    "/api/demo/threat-scenario",
+    tags=["Threat Pipeline", "Demonstration & Simulation"],
+    summary="Run deterministic end-to-end threat pipeline demo",
+    description="""
+Runs a fully deterministic hackathon demo scenario through:
+INGEST → NORMALIZE → CORRELATE → TRIAGE → PRIORITIZE → MITRE → BLUF → autonomous response.
+
+Scenarios: `coordinated_intrusion`, `benign_noise`, `needs_review`.
+""",
+)
+async def run_threat_scenario_demo(req: ThreatScenarioRequest) -> Dict[str, Any]:
+    try:
+        pipeline = threat_pipeline or _init_threat_pipeline()
+        return await pipeline.run_demo_scenario(req.scenario, auto_respond=True)
+    except KeyError:
+        raise HTTPException(status_code=400, detail=f"Unknown scenario: {req.scenario}")
+
+
+@app.get(
+    "/api/pipeline/incidents",
+    tags=["Threat Pipeline"],
+    summary="List prioritized pipeline incidents",
+)
+async def list_pipeline_incidents(limit: int = Query(20, ge=1, le=200)) -> List[Dict[str, Any]]:
+    pipeline = threat_pipeline or _init_threat_pipeline()
+    return pipeline.list_prioritized_incidents(limit=limit)
 
 
 @app.post(

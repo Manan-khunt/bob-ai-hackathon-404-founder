@@ -10,7 +10,14 @@ import os
 import logging
 from typing import List, Optional, Dict, Any, Generator
 from contextlib import contextmanager
-from common.schemas import Antibody, ConfirmedThreat, AgentAcknowledgement, AntibodySignature
+from common.schemas import (
+    Antibody,
+    ConfirmedThreat,
+    AgentAcknowledgement,
+    AntibodySignature,
+    NormalizedThreatEvent,
+    PipelineIncidentRecord,
+)
 from orchestrator.mitre_mapping import get_mitre_technique
 
 logger = logging.getLogger("orchestrator.database")
@@ -153,8 +160,58 @@ class ImmuneDatabase:
                 )
             """)
 
+            # Normalized multi-source threat events (pipeline ingestion)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS normalized_events (
+                    event_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL,
+                    source_name TEXT,
+                    timestamp TEXT NOT NULL,
+                    asset_id TEXT,
+                    source_ip TEXT,
+                    destination TEXT,
+                    event_type TEXT,
+                    severity TEXT,
+                    raw_message TEXT,
+                    indicators_json TEXT,
+                    evidence_json TEXT,
+                    confidence REAL,
+                    scenario TEXT,
+                    correlation_key TEXT,
+                    raw_event_json TEXT,
+                    demo_synthetic INTEGER DEFAULT 1,
+                    ingested_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Pipeline incidents (correlation + triage + priority)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_incidents (
+                    incident_id TEXT PRIMARY KEY,
+                    correlation_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    correlated_event_ids_json TEXT,
+                    source_types_json TEXT,
+                    correlation_score REAL,
+                    confidence_score REAL,
+                    evidence_count INTEGER,
+                    classification TEXT,
+                    classification_reason TEXT,
+                    rule_version TEXT,
+                    priority_score INTEGER,
+                    priority_level TEXT,
+                    priority_reason TEXT,
+                    scenario_type TEXT,
+                    mitre_json TEXT,
+                    bluf_json TEXT,
+                    blast_radius_json TEXT,
+                    audit_json TEXT
+                )
+            """)
+
             # Set initial schema migration version
             cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES (1)")
+            cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)")
             conn.commit()
 
     # ---------------------------------------------------------
@@ -607,5 +664,123 @@ class ImmuneDatabase:
             cursor.execute("DELETE FROM agent_acknowledgements")
             cursor.execute("DELETE FROM audit_events")
             cursor.execute("DELETE FROM honeypot_events")
+            cursor.execute("DELETE FROM normalized_events")
+            cursor.execute("DELETE FROM pipeline_incidents")
             conn.commit()
             logger.info("[DB RESET] Simulation tables cleared.")
+
+    # ---------------------------------------------------------
+    # Normalized events & pipeline incidents
+    # ---------------------------------------------------------
+    def save_normalized_event(self, event: NormalizedThreatEvent) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO normalized_events (
+                    event_id, source_type, source_name, timestamp, asset_id, source_ip,
+                    destination, event_type, severity, raw_message, indicators_json,
+                    evidence_json, confidence, scenario, correlation_key, raw_event_json, demo_synthetic
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                event.event_id,
+                event.source_type,
+                event.source_name,
+                event.timestamp,
+                event.asset_id,
+                event.source_ip,
+                event.destination,
+                event.event_type,
+                event.severity,
+                event.raw_message,
+                json.dumps(event.indicators),
+                json.dumps(event.evidence),
+                event.confidence,
+                event.scenario,
+                event.correlation_key,
+                json.dumps(event.raw_event),
+                1 if event.demo_synthetic else 0,
+            ))
+            conn.commit()
+            return True
+
+    def get_normalized_events(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM normalized_events ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["indicators"] = json.loads(item.pop("indicators_json") or "{}")
+            item["evidence"] = json.loads(item.pop("evidence_json") or "{}")
+            item["raw_event"] = json.loads(item.pop("raw_event_json") or "{}")
+            item["demo_synthetic"] = bool(item.get("demo_synthetic"))
+            out.append(item)
+        return out
+
+    def save_pipeline_incident(self, record: PipelineIncidentRecord) -> bool:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO pipeline_incidents (
+                    incident_id, correlation_id, created_at, correlated_event_ids_json,
+                    source_types_json, correlation_score, confidence_score, evidence_count,
+                    classification, classification_reason, rule_version, priority_score,
+                    priority_level, priority_reason, scenario_type, mitre_json, bluf_json,
+                    blast_radius_json, audit_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                record.incident_id,
+                record.correlation_id,
+                record.created_at,
+                json.dumps(record.correlated_event_ids),
+                json.dumps(record.source_types),
+                record.correlation_score,
+                record.confidence_score,
+                record.evidence_count,
+                record.classification,
+                record.classification_reason,
+                record.rule_version,
+                record.priority_score,
+                record.priority_level,
+                record.priority_reason,
+                record.scenario_type,
+                json.dumps(record.mitre),
+                json.dumps(record.bluf),
+                json.dumps(record.blast_radius or {}),
+                json.dumps(record.audit),
+            ))
+            conn.commit()
+            return True
+
+    def get_pipeline_incidents(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM pipeline_incidents ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+        return [self._row_to_pipeline_incident(r) for r in rows]
+
+    def get_pipeline_incident(self, incident_id: str) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM pipeline_incidents WHERE incident_id = ?", (incident_id,))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        return self._row_to_pipeline_incident(row)
+
+    def _row_to_pipeline_incident(self, row: sqlite3.Row) -> Dict[str, Any]:
+        item = dict(row)
+        item["correlated_event_ids"] = json.loads(item.pop("correlated_event_ids_json") or "[]")
+        item["source_types"] = json.loads(item.pop("source_types_json") or "[]")
+        item["mitre"] = json.loads(item.pop("mitre_json") or "{}")
+        item["bluf"] = json.loads(item.pop("bluf_json") or "{}")
+        item["blast_radius"] = json.loads(item.pop("blast_radius_json") or "{}")
+        item["audit"] = json.loads(item.pop("audit_json") or "{}")
+        return item

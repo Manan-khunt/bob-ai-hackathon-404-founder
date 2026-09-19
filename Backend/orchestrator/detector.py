@@ -4,13 +4,15 @@ Correlates agent-local anomaly signals with aggregated telemetry to confirm high
 mapping detections to MITRE ATT&CK techniques and generating executive BLUF incident summaries.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import collections
 import logging
+from datetime import datetime, timezone
 from common.schemas import (
     TelemetryEvent,
     LocalAnomalyEvent,
     ConfirmedThreat,
+    NormalizedThreatEvent,
     generate_uuid,
     utc_iso_now,
 )
@@ -20,6 +22,26 @@ from orchestrator.bluf import generate_bluf_summary
 from orchestrator.explain import generate_explanation
 
 logger = logging.getLogger("orchestrator.detector")
+
+CORRELATION_RULE_VERSION = "adaptive-correlator-multisource-v1"
+
+# Weight factors for normalized multi-source correlation (sum used as multiplier, capped at 1.0).
+CORRELATION_FACTORS: Dict[str, float] = {
+    "temporal_proximity": 0.12,
+    "same_asset": 0.15,
+    "shared_ioc": 0.15,
+    "common_source_ip": 0.12,
+    "related_attack_behaviour": 0.10,
+    "mitre_technique_overlap": 0.10,
+    "anomaly_score": 0.13,
+    "source_agreement": 0.13,
+}
+
+ATTACK_BEHAVIOUR_FAMILIES: Dict[str, Set[str]] = {
+    "reconnaissance": {"port_scan", "network_scan", "service_discovery", "probe", "syn_scan"},
+    "intrusion": {"exploit_attempt", "honeypot_probe", "lateral_movement", "connection_spike"},
+    "endpoint_anomaly": {"endpoint_anomaly", "process_anomaly", "isolation_forest_alert"},
+}
 
 
 class AdaptiveCorrelator:
@@ -281,3 +303,132 @@ class AdaptiveCorrelator:
             )
 
         return confirmed_threat
+
+    def correlate_normalized_events(
+        self,
+        events: List[NormalizedThreatEvent],
+        *,
+        incident_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Correlate normalized multi-source events using deterministic scoring.
+
+        Considers temporal proximity, asset/IOC/IP overlap, attack behaviour,
+        MITRE mapping, anomaly confidence, and source agreement.
+        """
+        if not events:
+            return {
+                "correlation_score": 0.0,
+                "confidence_score": 0.0,
+                "evidence_count": 0,
+                "correlated_event_ids": [],
+                "incident_id": incident_id or generate_uuid("inc-"),
+                "correlation_id": generate_uuid("corr-"),
+                "rule_version": CORRELATION_RULE_VERSION,
+                "scenario_type": "unknown",
+            }
+
+        incident_id = incident_id or generate_uuid("inc-")
+        correlation_id = events[0].correlation_key or generate_uuid("corr-")
+
+        assets = {ev.asset_id for ev in events if ev.asset_id and ev.asset_id != "unknown"}
+        source_ips = {ev.source_ip for ev in events if ev.source_ip}
+        event_types = {ev.event_type.lower() for ev in events}
+        source_types = {ev.source_type for ev in events}
+
+        ioc_tokens: Set[str] = set()
+        for ev in events:
+            for val in (ev.source_ip, ev.destination, ev.asset_id):
+                if val:
+                    ioc_tokens.add(val.lower())
+            if isinstance(ev.indicators, dict):
+                for v in ev.indicators.values():
+                    if isinstance(v, str):
+                        ioc_tokens.add(v.lower())
+
+        score_parts: Dict[str, float] = {}
+
+        # Temporal proximity (within 10 minutes).
+        timestamps: List[datetime] = []
+        for ev in events:
+            try:
+                ts = datetime.fromisoformat(ev.timestamp.replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                timestamps.append(ts)
+            except (ValueError, TypeError):
+                continue
+        if len(timestamps) >= 2:
+            span = (max(timestamps) - min(timestamps)).total_seconds()
+            temporal = 1.0 if span <= 600 else max(0.0, 1.0 - (span - 600) / 3600)
+        else:
+            temporal = 1.0
+        score_parts["temporal_proximity"] = temporal * CORRELATION_FACTORS["temporal_proximity"]
+
+        score_parts["same_asset"] = (CORRELATION_FACTORS["same_asset"] if len(assets) == 1 else 0.0)
+        score_parts["shared_ioc"] = (
+            CORRELATION_FACTORS["shared_ioc"] if len(ioc_tokens) <= max(len(events) + 2, 3) else 0.05
+        )
+        score_parts["common_source_ip"] = (
+            CORRELATION_FACTORS["common_source_ip"] if len(source_ips) == 1 and source_ips else 0.0
+        )
+
+        families_hit = set()
+        for et in event_types:
+            for fam, members in ATTACK_BEHAVIOUR_FAMILIES.items():
+                if et in members:
+                    families_hit.add(fam)
+        score_parts["related_attack_behaviour"] = (
+            CORRELATION_FACTORS["related_attack_behaviour"] if len(families_hit) >= 1 and len(event_types) >= 2 else 0.0
+        )
+
+        scenario_hint = self._infer_scenario_from_events(events)
+        mitre = get_mitre_technique(scenario_hint)
+        score_parts["mitre_technique_overlap"] = (
+            CORRELATION_FACTORS["mitre_technique_overlap"]
+            if mitre.get("technique_id") not in (None, "UNKNOWN")
+            else 0.02
+        )
+
+        avg_conf = sum(ev.confidence for ev in events) / len(events)
+        score_parts["anomaly_score"] = min(1.0, avg_conf) * CORRELATION_FACTORS["anomaly_score"]
+
+        source_agreement = min(1.0, len(source_types) / 4.0)
+        score_parts["source_agreement"] = source_agreement * CORRELATION_FACTORS["source_agreement"]
+
+        correlation_score = round(min(1.0, sum(score_parts.values())), 4)
+
+        # Confidence blends per-event confidence with correlation strength.
+        confidence_score = round(min(1.0, (avg_conf * 0.45) + (correlation_score * 0.55)), 4)
+
+        evidence_count = len(events) + sum(len(ev.evidence) for ev in events)
+
+        return {
+            "correlation_score": correlation_score,
+            "confidence_score": confidence_score,
+            "evidence_count": evidence_count,
+            "correlated_event_ids": [ev.event_id for ev in events],
+            "incident_id": incident_id,
+            "correlation_id": correlation_id,
+            "rule_version": CORRELATION_RULE_VERSION,
+            "scenario_type": scenario_hint,
+            "score_breakdown": score_parts,
+            "source_types": sorted(source_types),
+            "mitre_base": mitre,
+        }
+
+    @staticmethod
+    def _infer_scenario_from_events(events: List[NormalizedThreatEvent]) -> str:
+        for ev in events:
+            if ev.scenario:
+                return str(ev.scenario).lower()
+        types = " ".join(ev.event_type.lower() for ev in events)
+        if any(x in types for x in ("port_scan", "scan", "probe", "discovery")):
+            return "port_scan"
+        if any(x in types for x in ("cryptominer", "miner", "crypto")):
+            return "cryptominer"
+        if any(x in types for x in ("c2", "beacon", "exfil")):
+            return "c2_beacon"
+        if any(x in types for x in ("worm", "lateral")):
+            return "worm"
+        return "port_scan" if events else "unknown"

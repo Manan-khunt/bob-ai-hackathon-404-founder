@@ -1,83 +1,163 @@
 import { create } from 'zustand';
+import { INITIAL_ALERTS, INITIAL_INCIDENTS, OPERATIONAL_SOURCES, EXECUTIVE_METRICS } from './data/demoData';
 
-let evtSeq = 0;
+export const useAppStore = create((set, get) => ({
+  // Data sets
+  alerts: INITIAL_ALERTS,
+  incidents: INITIAL_INCIDENTS,
+  sources: OPERATIONAL_SOURCES,
+  metrics: EXECUTIVE_METRICS,
 
-const INIT_NODES = [
-  'node-alpha','node-beta','node-gamma','node-delta',
-  'node-epsilon','node-zeta','node-eta','node-theta',
-];
+  // Selected entities
+  selectedAlert: null,
+  selectedIncidentId: 'INC-1042',
+  selectedFalsePositive: null,
+  isBobOpen: false,
 
-export const useStore = create((set, get) => ({
-  booted: false,
-  setBooted: () => set({ booted: true }),
+  // Operational status
+  operationalStatus: 'ELEVATED',
+  operationalMode: 'LIVE INGESTION & CORRELATION',
+  backendConnected: false,
+  lastSyncTime: new Date(),
 
-  serverStartMs: Date.now(),
+  // Demo Simulation State
+  demoState: {
+    active: false,
+    scenarioName: null,
+    currentStep: 0,
+    totalSteps: 10,
+    statusText: '',
+    logs: [],
+  },
 
-  immunity: { immunity_pct: 100, active_threats: 0, antibodies_today: 0, false_positive_rate: 0, total_threats_seen: 0, nodes_total: 8, antibodies_total: 0 },
-  setImmunity: (d) => set({ immunity: { ...get().immunity, ...d } }),
+  // Actions
+  setAlerts: (alerts) => set({ alerts }),
+  setIncidents: (incidents) => set({ incidents }),
+  setSources: (sources) => set({ sources }),
+  setMetrics: (metrics) => set({ metrics }),
 
-  nodes: Object.fromEntries(INIT_NODES.map(n => [n, {
-    agent_id: n,
-    status: 'healthy',
-    anomaly_score: 4.0,
-    ip: '',
-    antibodies_installed: [],
-    last_seen: new Date().toISOString(),
-    active_threat: null,
-    biomarkers: {},
-    neutralized_count: 0,
-    owner_id: 'admin_1',
-  }])),
-  setNodes: (arr) => set({ nodes: Object.fromEntries(arr.map(n => [n.agent_id, n])) }),
-  applyPatch: (nodeId, patch) => set(s => ({
-    nodes: { ...s.nodes, [nodeId]: { ...(s.nodes[nodeId] || {}), ...patch } },
-  })),
+  selectAlert: (alert) => set({ selectedAlert: alert }),
+  closeAlertDrawer: () => set({ selectedAlert: null }),
 
-  timeline: [],
-  pushTimeline: (evt) => set(s => {
-    const entry = { id: evt.id || `t-${Date.now()}-${(evtSeq++)}`, iconType: evt.iconType || 'broadcast', ...evt };
-    return { timeline: [entry, ...s.timeline].slice(0, 80) };
-  }),
+  selectIncident: (id) => set({ selectedIncidentId: id }),
 
-  antibodies: [],
-  setAntibodies: (a) => set({ antibodies: a }),
-  upsertAntibody: (ab) => set(s => {
-    const idx = s.antibodies.findIndex(a => (a.id || a.antibody_id) === (ab.id || ab.antibody_id));
-    if (idx >= 0) {
-      const next = [...s.antibodies];
-      next[idx] = ab;
-      return { antibodies: next };
-    }
-    return { antibodies: [ab, ...s.antibodies] };
-  }),
+  selectFalsePositive: (alert) => set({ selectedFalsePositive: alert }),
+  closeFalsePositiveModal: () => set({ selectedFalsePositive: null }),
 
-  honeypotEvents: [],
-  setHoneypotEvents: (e) => set({ honeypotEvents: e }),
-  addHoneypotEvent: (e) => set(s => ({ honeypotEvents: [e, ...s.honeypotEvents] })),
+  toggleBob: () => set((s) => ({ isBobOpen: !s.isBobOpen })),
+  setBobOpen: (open) => set({ isBobOpen: open }),
 
-  incidents: [],
-  setIncidents: (a) => set({ incidents: a }),
+  setBackendConnected: (connected) => set({ backendConnected: connected }),
+  touchSync: () => set({ lastSyncTime: new Date() }),
 
-  selectedNodeId: null,
-  selectNode: (id) => set({ selectedNodeId: id }),
+  // Live Asset Isolation
+  isolateAsset: (incidentId, assetId) => {
+    set((state) => ({
+      incidents: state.incidents.map((inc) => {
+        if (inc.id === incidentId) {
+          return {
+            ...inc,
+            affectedAssets: inc.affectedAssets.map((asset) =>
+              asset.id === assetId ? { ...asset, status: 'Isolated (Encrypted Quarantine)' } : asset
+            ),
+          };
+        }
+        return inc;
+      }),
+    }));
+  },
 
-  blastRadius: null,
-  setBlastRadius: (b) => set({ blastRadius: b }),
+  // Demo Mode Simulation Orchestrator
+  startCoordinatedIntrusionDemo: () => {
+    const steps = [
+      { step: 1, text: 'Step 1: Incoming SIEM alert (SYN probe on NODE-ALPHA)' },
+      { step: 2, text: 'Step 2: Cyber Sensor alert (Covert TLS beaconing matching APT-29 profile)' },
+      { step: 3, text: 'Step 3: Endpoint anomaly (lsass.exe memory dumping intercepted on NODE-BETA)' },
+      { step: 4, text: 'Step 4: Intelligence report (Allied feed matches C2 IP to Operation GhostPulse)' },
+      { step: 5, text: 'Step 5: IMMUNE-NET correlation engine links all 4 events across time & topology' },
+      { step: 6, text: 'Step 6: AI triage classifies cluster as TRUE THREAT (96% Confidence)' },
+      { step: 7, text: 'Step 7: Priority score calculated: 97/100 (CRITICAL DEFENCE PRIORITY)' },
+      { step: 8, text: 'Step 8: MITRE ATT&CK techniques assigned: T1071 (C2), T1003 (Creds), T1210 (Lateral)' },
+      { step: 9, text: 'Step 9: Commander BLUF generated with immediate isolation recommendation' },
+      { step: 10, text: 'Step 10: Incident INC-1042 positioned at top of priority queue with armed countermeasures' },
+    ];
 
-  aptAttribution: null,
-  setAptAttribution: (a) => set({ aptAttribution: a }),
+    // Reset and initialize simulation
+    set({
+      demoState: {
+        active: true,
+        scenarioName: 'Coordinated Intrusion (Multi-Source APT)',
+        currentStep: 1,
+        totalSteps: 10,
+        statusText: steps[0].text,
+        logs: [steps[0].text],
+      },
+      selectedIncidentId: 'INC-1042',
+      operationalStatus: 'CRITICAL',
+    });
 
-  currentPage: 'dashboard',
-  setPage: (p) => set({ currentPage: p }),
+    let current = 1;
+    const interval = setInterval(() => {
+      current += 1;
+      if (current <= 10) {
+        set((state) => ({
+          demoState: {
+            ...state.demoState,
+            currentStep: current,
+            statusText: steps[current - 1].text,
+            logs: [steps[current - 1].text, ...state.demoState.logs],
+          },
+          // Dynamic metric increments during simulation
+          metrics: {
+            ...state.metrics,
+            totalAlerts: state.metrics.totalAlerts + 1,
+            trueThreats: current >= 6 ? state.metrics.trueThreats : state.metrics.trueThreats,
+          },
+        }));
+      } else {
+        clearInterval(interval);
+      }
+    }, 1800);
+  },
+
+  startBenignNoiseDemo: () => {
+    set({
+      demoState: {
+        active: true,
+        scenarioName: 'Benign Noise Auto-Suppression',
+        currentStep: 3,
+        totalSteps: 3,
+        statusText: 'Evaluated 1,147 isolated signals. 91.4% automatically suppressed as False Positives.',
+        logs: [
+          'Suppression Engine active across SIEM, Endpoint and OSINT feeds.',
+          'Isolated alerts reconciled with authorized change requests and vendor checksums.',
+          'Analyst workload reduced by 84.2%. Zero critical threats obscured.',
+        ],
+      },
+      metrics: {
+        ...get().metrics,
+        falsePositives: 1147,
+      },
+    });
+  },
+
+  resetDemo: () => {
+    set({
+      alerts: INITIAL_ALERTS,
+      incidents: INITIAL_INCIDENTS,
+      metrics: EXECUTIVE_METRICS,
+      selectedIncidentId: 'INC-1042',
+      operationalStatus: 'ELEVATED',
+      demoState: {
+        active: false,
+        scenarioName: null,
+        currentStep: 0,
+        totalSteps: 10,
+        statusText: '',
+        logs: [],
+      },
+    });
+  },
 }));
 
-export const iconForEventType = (type) => {
-  if (!type) return 'broadcast';
-  const t = String(type).toLowerCase();
-  if (t.includes('quarantine') || t.includes('inflamm')) return 'quarantine';
-  if (t.includes('detect') || t.includes('anomal')) return 'detection';
-  if (t.includes('antibody') || t.includes('vaccin')) return 'antibody';
-  if (t.includes('reset')) return 'broadcast';
-  if (t.includes('neutral')) return 'antibody';
-  return 'broadcast';
-};
+export const useStore = useAppStore;

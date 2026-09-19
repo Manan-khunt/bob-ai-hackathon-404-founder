@@ -25,7 +25,7 @@ logger = logging.getLogger("orchestrator.bob_mcp")
 router = APIRouter()
 
 MCP_SERVER_NAME = "immune-net-bob-mcp"
-MCP_SERVER_VERSION = "1.0.0"
+MCP_SERVER_VERSION = "1.1.0"
 
 # Shared live context populated by orchestrator/app.py at startup.
 MCP_CONTEXT: Dict[str, Any] = {}
@@ -176,6 +176,92 @@ def _tool_antibody_library(ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _tool_threat_feed(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline = ctx.get("threat_pipeline")
+    db = ctx["db"]
+    if pipeline:
+        events = pipeline.get_threat_feed(limit=50)
+    else:
+        events = db.get_normalized_events(limit=50)
+    return {"count": len(events), "events": events, "demo_note": "May include synthetic hackathon demo feeds."}
+
+
+def _tool_prioritized_incidents(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline = ctx.get("threat_pipeline")
+    db = ctx["db"]
+    if pipeline:
+        incidents = pipeline.list_prioritized_incidents(limit=20)
+    else:
+        incidents = db.get_pipeline_incidents(limit=20)
+    brief = [
+        {
+            "incident_id": inc.get("incident_id"),
+            "priority_score": inc.get("priority_score"),
+            "classification": inc.get("classification"),
+            "confidence": inc.get("confidence_score"),
+            "mitre": inc.get("mitre"),
+            "bluf": inc.get("bluf"),
+        }
+        for inc in incidents
+    ]
+    return {"count": len(brief), "incidents": brief}
+
+
+def _tool_false_positives(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline = ctx.get("threat_pipeline")
+    if pipeline:
+        fps = pipeline.list_false_positives(limit=20)
+    else:
+        fps = [
+            i for i in ctx["db"].get_pipeline_incidents(limit=100)
+            if i.get("classification") == "FALSE_POSITIVE"
+        ]
+    return {"count": len(fps), "false_positives": fps}
+
+
+def _tool_incident_summary(ctx: Dict[str, Any], incident_id: str) -> Dict[str, Any]:
+    pipeline = ctx.get("threat_pipeline")
+    if pipeline:
+        summary = pipeline.get_incident_summary(incident_id)
+    else:
+        summary = ctx["db"].get_pipeline_incident(incident_id)
+    if not summary:
+        return {"error": f"incident {incident_id} not found"}
+    return summary
+
+
+def _tool_commander_bluf(ctx: Dict[str, Any], incident_id: str) -> Dict[str, Any]:
+    summary = _tool_incident_summary(ctx, incident_id)
+    if summary.get("error"):
+        return summary
+    bluf = summary.get("bluf") or {}
+    return {
+        "incident_id": incident_id,
+        "classification": summary.get("classification"),
+        "priority": {
+            "score": summary.get("priority_score"),
+            "level": summary.get("priority_level"),
+        },
+        "bluf": bluf,
+    }
+
+
+def _tool_explain_correlation(ctx: Dict[str, Any], incident_id: str) -> Dict[str, Any]:
+    pipeline = ctx.get("threat_pipeline")
+    if pipeline:
+        explanation = pipeline.explain_correlation(incident_id)
+    else:
+        inc = ctx["db"].get_pipeline_incident(incident_id)
+        explanation = {
+            "incident_id": incident_id,
+            "correlation_score": inc.get("correlation_score") if inc else None,
+            "audit": inc.get("audit") if inc else None,
+        } if inc else None
+    if not explanation:
+        return {"error": f"incident {incident_id} not found"}
+    return explanation
+
+
 def _tool_blast_radius(ctx: Dict[str, Any], node_id: str) -> Dict[str, Any]:
     node_states = ctx["node_states"]
     telemetry = {}
@@ -220,6 +306,30 @@ TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "description": "Lateral-movement propagation risk chain from an infected node.",
         "handler": _tool_blast_radius,
     },
+    "get_threat_feed": {
+        "description": "Recent normalized multi-source threat events from the ingestion pipeline.",
+        "handler": _tool_threat_feed,
+    },
+    "get_prioritized_incidents": {
+        "description": "Pipeline incidents sorted by priority with MITRE and BLUF summaries.",
+        "handler": _tool_prioritized_incidents,
+    },
+    "get_false_positives": {
+        "description": "Incidents classified as FALSE_POSITIVE by deterministic triage.",
+        "handler": _tool_false_positives,
+    },
+    "get_incident_summary": {
+        "description": "Full pipeline incident record including audit trail.",
+        "handler": _tool_incident_summary,
+    },
+    "generate_commander_bluf": {
+        "description": "Commander-oriented BLUF block for a pipeline incident.",
+        "handler": _tool_commander_bluf,
+    },
+    "explain_correlation": {
+        "description": "Explain why events were correlated into an incident.",
+        "handler": _tool_explain_correlation,
+    },
 }
 
 # Async tools resolved by the application layer (they need awaiting):
@@ -240,6 +350,8 @@ def dispatch_with_context(ctx: Dict[str, Any], method: str, params: Optional[Dic
     handler = tool["handler"]
     if method in ("get_node_detail", "quarantine_node", "release_node", "get_blast_radius"):
         return handler(ctx, params.get("node_id") or "")
+    if method in ("get_incident_summary", "generate_commander_bluf", "explain_correlation"):
+        return handler(ctx, params.get("incident_id") or "")
     return handler(ctx)
 
 
@@ -273,6 +385,8 @@ def build_manifest() -> Dict[str, Any]:
 def _parameters_for(name: str) -> List[Dict[str, Any]]:
     if name in ("get_node_detail", "quarantine_node", "release_node", "get_blast_radius"):
         return [{"name": "node_id", "type": "string", "required": True, "example": "node-beta"}]
+    if name in ("get_incident_summary", "generate_commander_bluf", "explain_correlation"):
+        return [{"name": "incident_id", "type": "string", "required": True, "example": "inc-00000000-0000-0000-0000-000000000001"}]
     if name == "run_simulation":
         return [{"name": "scenario", "type": "string", "required": True, "example": "cryptominer"}]
     return []

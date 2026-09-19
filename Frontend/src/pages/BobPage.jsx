@@ -1,15 +1,10 @@
-import BobChat from '../components/BobChat';
-import IbmTechPanel from '../components/IbmTechPanel';
+import React from 'react';
+import BobAssistantPanel from '../components/bob/BobAssistantPanel';
 
 export default function BobPage() {
   return (
-    <div className="space-y-4">
-      <div className="hacker-panel p-4 flex items-center justify-between">
-        <span className="hacker-title text-sm">&gt; BOB // IBM WATSONX MCP CONSOLE</span>
-        <span className="font-mono text-hacker-muted text-[10px]">JSON-RPC 2.0 over HTTP</span>
-      </div>
-      <BobChat />
-      <IbmTechPanel />
+    <div className="h-[calc(100vh-8.5rem)] max-w-[1400px] mx-auto pb-4">
+      <BobAssistantPanel isDedicatedPage={true} />
     </div>
   );
 }

@@ -5,6 +5,7 @@ Compliant with IBM BoB AI Innovation Hackathon PRD, OpenAPI 3.1 specifications, 
 
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field, model_validator
+from enum import Enum
 import uuid
 from datetime import datetime, timezone
 
@@ -64,6 +65,74 @@ def generate_uuid(prefix: str = "") -> str:
     """Generate a UUID with optional prefix."""
     uid = str(uuid.uuid4())
     return f"{prefix}{uid}" if prefix else uid
+
+
+# ---------------------------------------------------------
+# Normalized multi-source threat pipeline
+# ---------------------------------------------------------
+class SourceType(str, Enum):
+    SIEM = "SIEM"
+    CYBER_SENSOR = "CYBER_SENSOR"
+    SATELLITE = "SATELLITE"
+    INTELLIGENCE_REPORT = "INTELLIGENCE_REPORT"
+    HONEYPOT = "HONEYPOT"
+    ENDPOINT = "ENDPOINT"
+    NETWORK_SENSOR = "NETWORK_SENSOR"
+
+
+class TriageClassification(str, Enum):
+    TRUE_THREAT = "TRUE_THREAT"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+class NormalizedThreatEvent(BaseModel):
+    """Common internal representation for all ingested threat sources."""
+
+    event_id: str = Field(default_factory=lambda: generate_uuid("norm-"))
+    source_type: str = Field(..., description="SIEM, HONEYPOT, ENDPOINT, etc.")
+    source_name: str = Field(default="unknown-source")
+    timestamp: str = Field(default_factory=utc_iso_now)
+    asset_id: str = Field(default="unknown")
+    source_ip: str = Field(default="")
+    destination: str = Field(default="")
+    event_type: str = Field(default="unknown")
+    severity: str = Field(default="medium")
+    raw_message: str = Field(default="")
+    indicators: Dict[str, Any] = Field(default_factory=dict)
+    evidence: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    scenario: Optional[str] = Field(default=None)
+    correlation_key: str = Field(default="")
+    raw_event: Dict[str, Any] = Field(default_factory=dict)
+    demo_synthetic: bool = Field(
+        default=True,
+        description="Hackathon demo flag — distinguishes synthetic intelligence from live feeds.",
+    )
+
+
+class PipelineIncidentRecord(BaseModel):
+    """Persisted correlated incident with triage, priority, and audit metadata."""
+
+    incident_id: str = Field(default_factory=lambda: generate_uuid("inc-"))
+    correlation_id: str = Field(default_factory=lambda: generate_uuid("corr-"))
+    created_at: str = Field(default_factory=utc_iso_now)
+    correlated_event_ids: List[str] = Field(default_factory=list)
+    source_types: List[str] = Field(default_factory=list)
+    correlation_score: float = Field(default=0.0)
+    confidence_score: float = Field(default=0.0)
+    evidence_count: int = Field(default=0)
+    classification: str = Field(default=TriageClassification.NEEDS_REVIEW.value)
+    classification_reason: str = Field(default="")
+    rule_version: str = Field(default="pipeline-v1")
+    priority_score: int = Field(default=0)
+    priority_level: str = Field(default="LOW")
+    priority_reason: str = Field(default="")
+    scenario_type: str = Field(default="unknown")
+    mitre: Dict[str, Any] = Field(default_factory=dict)
+    bluf: Dict[str, Any] = Field(default_factory=dict)
+    blast_radius: Optional[Dict[str, Any]] = Field(default=None)
+    audit: Dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------
