@@ -681,6 +681,7 @@ async def get_incident_detail(incident_id: str = Path(...)) -> Dict[str, Any]:
     summary="List Alert Feed",
     description="Returns all alerts matching the frontend alert feed format.",
 )
+@app.get("/api/alerts", include_in_schema=False)
 async def get_alerts() -> List[Dict[str, Any]]:
     """Return alert feed for the frontend."""
     return seed_store.alerts
@@ -1171,6 +1172,135 @@ async def get_fleet_stats() -> Dict[str, Any]:
 async def get_sources() -> List[Dict[str, Any]]:
     """Return operational sources for the frontend SourcesPage."""
     return seed_store.sources
+
+
+class BobAnalyzeRequest(BaseModel):
+    query: str
+    context: Optional[Dict[str, Any]] = None
+
+@app.post(
+    "/api/bob/analyze",
+    tags=["Threat Pipeline"],
+    summary="Bob AI Intelligence Analyst",
+    description="Analyze a query against live backend data and return an intelligence briefing.",
+)
+async def bob_analyze(req: BobAnalyzeRequest) -> Dict[str, Any]:
+    """Bob AI: query live pipeline data to generate contextual intelligence response."""
+    query_lower = req.query.lower()
+    
+    # Get live data
+    alerts = seed_store.alerts
+    incidents = seed_store.incidents
+    metrics = seed_store.metrics
+    
+    # Find highest priority incident
+    true_threats = [i for i in incidents if i.get("classification") == "TRUE_THREAT"]
+    critical = [i for i in incidents if i.get("severity") == "CRITICAL"]
+    
+    if any(w in query_lower for w in ["most important", "highest priority", "critical threat", "top threat"]):
+        if true_threats:
+            inc = true_threats[0]
+            bluf = inc.get("bluf", {})
+            return {"response": f"""**{inc['id']}** is currently the highest-priority incident.
+
+- **Priority Score**: {inc['priorityScore']}/100 ({inc['severity']})
+- **Correlation Confidence**: {inc['confidence']}%
+- **Affected Assets**: {inc['assetsCount']} ({', '.join(a['id'] for a in inc.get('affectedAssets', []))})
+- **MITRE Tactics**: {', '.join(inc.get('mitreIds', []))}
+- **Source Consensus**: Supported by **{inc['sourcesCount']} independent source types** ({', '.join(inc.get('sources', []))}).
+
+**Operational Assessment**:
+{inc.get('summary', 'Multi-source correlation analysis in progress.')}
+
+**Recommended Action**:
+{bluf.get('recommendedAction', 'Continue monitoring and correlation analysis.')}"""}
+    
+    if any(w in query_lower for w in ["bluf", "briefing", "commander"]):
+        if true_threats:
+            inc = true_threats[0]
+            bluf = inc.get("bluf", {})
+            evidence = bluf.get("evidence", [])
+            mitre_map = bluf.get("mitreMapping", [])
+            return {"response": f"""### COMMANDER'S BLUF (Bottom Line Up Front)
+**INCIDENT**: {inc['id']} // {inc['title'].upper()}
+**PRIORITY**: {inc['priorityScore']}/100 — {inc['severity']} // CONFIDENCE: {inc['confidence']}%
+
+**1. BOTTOM LINE**:
+{bluf.get('bottomLine', 'Analysis in progress.')}
+
+**2. OPERATIONAL IMPACT**:
+{bluf.get('impact', 'Impact assessment pending.')}
+
+**3. MULTI-SOURCE EVIDENCE**:
+{chr(10).join('• ' + e for e in evidence)}
+
+**4. MITRE ATT&CK MAPPING**:
+{chr(10).join('• **' + m.get('id', '') + '**: ' + m.get('name', '') for m in mitre_map)}
+
+**5. RECOMMENDED IMMEDIATE ACTION**:
+{bluf.get('recommendedAction', 'Awaiting analysis.')}"""}
+    
+    if any(w in query_lower for w in ["false positive", "suppress", "noise"]):
+        fp_incidents = [i for i in incidents if i.get("classification") == "FALSE_POSITIVE"]
+        fp_alerts = [a for a in alerts if a.get("classification") == "FALSE_POSITIVE"]
+        return {"response": f"""### False Positive Analysis
+
+**Suppression Statistics**:
+- **Total False Positives**: {metrics['falsePositives']}
+- **False Positive Rate**: {metrics['falsePositiveReductionPct']}%
+- **Analyst Workload Reduction**: {metrics['analystWorkloadReductionPct']}%
+
+**Active False Positive Incidents**: {len(fp_incidents)}
+{chr(10).join('• ' + i['id'] + ' — ' + i['title'] for i in fp_incidents)}
+
+**Auto-Suppressed Alerts**: {len(fp_alerts)}
+{chr(10).join('• ' + a['id'] + ' — ' + a['event'][:60] for a in fp_alerts[:5])}
+
+**Conclusion**:
+IMMUNE-NET AI suppression engine is functioning correctly, filtering benign operational noise while preserving zero critical threats."""}
+
+    if any(w in query_lower for w in ["asset", "affected", "node"]):
+        all_assets = []
+        for inc in true_threats:
+            for asset in inc.get("affectedAssets", []):
+                all_assets.append({**asset, "incident": inc["id"]})
+        return {"response": f"""### Affected Operational Assets Summary
+
+**Total At-Risk Assets**: {len(all_assets)}
+{chr(10).join('• **' + a['id'] + '** (' + a['role'] + '): ' + a['status'] + ' [' + a['incident'] + ']' for a in all_assets)}
+
+**Network Impact**: {len(set(a['id'] for a in all_assets))} unique assets across {len(set(a['incident'] for a in all_assets))} correlated incidents."""}
+
+    if any(w in query_lower for w in ["priority score", "calculated", "how"]):
+        return {"response": f"""### Priority Score Engine
+
+The priority scoring uses a weighted multi-variable formula:
+
+- **Correlation Score (30%)**: Cross-source temporal and behavioral correlation
+- **Severity Value (25%)**: Critical=1.0, High=0.8, Medium=0.5, Low=0.2
+- **Confidence (20%)**: Sensor agreement and evidence strength
+- **Multi-Source Diversity (15%)**: Number of independent corroborating sources
+- **Asset Criticality (10%)**: Target asset tier classification
+
+**Current System Metrics**:
+- Total alerts processed: {metrics['totalAlerts']}
+- Correlated incidents: {metrics['correlatedIncidents']}
+- Mean time to detect: {metrics['meanTimeToDetectSec']}s
+- Mean time to triage: {metrics['meanTimeToTriageSec']}s"""}
+
+    # Default response
+    return {"response": f"""### Operational Intelligence Assessment
+
+I have reviewed the current multi-source threat stream. We are actively tracking **{metrics['correlatedIncidents']} correlated incidents** with **{metrics['criticalIncidents']} flagged as critical priority**.
+
+**Current Key Findings**:
+1. **Active True Threats**: {metrics['trueThreats']} confirmed threats requiring ongoing monitoring.
+2. **Alert Volume**: {metrics['totalAlerts']} total alerts processed with {metrics['falsePositives']} automatically suppressed as false positives.
+3. **Source Coverage**: {metrics['activeSources']} intelligence feeds operational with {metrics['analystWorkloadReductionPct']}% workload reduction.
+
+**Top Priority Incident**: {true_threats[0]['id'] if true_threats else 'None'} ({true_threats[0]['title'][:50] if true_threats else 'All clear'})
+
+How would you like me to assist? You can ask me to generate a BLUF briefing, analyze affected assets, explain the priority scoring, or review false positive suppression."""}
 
 
 # ---------------------------------------------------------

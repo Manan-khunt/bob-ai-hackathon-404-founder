@@ -50,6 +50,62 @@ export const useAppStore = create((set, get) => ({
   setBackendConnected: (connected) => set({ backendConnected: connected }),
   touchSync: () => set({ lastSyncTime: new Date() }),
 
+  // Nodes & Fleet (used by useApi.js and useWebSocket.js)
+  nodes: [],
+  setNodes: (nodes) => set({ nodes }),
+
+  // Immunity
+  immunity: { immunity_pct: 0, active_threats: 0, antibodies_total: 0 },
+  setImmunity: (data) => set((s) => ({ immunity: { ...s.immunity, ...data } })),
+
+  // Antibodies
+  antibodies: [],
+  setAntibodies: (abs) => set({ antibodies: abs }),
+  upsertAntibody: (ab) => set((s) => {
+    const idx = s.antibodies.findIndex((a) => a.antibody_id === ab.antibody_id);
+    if (idx >= 0) {
+      const copy = [...s.antibodies];
+      copy[idx] = ab;
+      return { antibodies: copy };
+    }
+    return { antibodies: [ab, ...s.antibodies] };
+  }),
+
+  // Timeline
+  timeline: [],
+  pushTimeline: (event) => set((s) => ({
+    timeline: [{ ...event, id: event.id || Date.now(), _ts: Date.now() }, ...s.timeline].slice(0, 100),
+  })),
+
+  // Blast Radius
+  blastRadius: null,
+  setBlastRadius: (data) => set({ blastRadius: data }),
+
+  // Honeypot
+  honeypotEvents: [],
+  setHoneypotEvents: (evts) => set({ honeypotEvents: evts }),
+  addHoneypotEvent: (evt) => set((s) => ({
+    honeypotEvents: [evt, ...s.honeypotEvents].slice(0, 50),
+  })),
+
+  // APT Attribution
+  aptAttribution: null,
+  setAptAttribution: (data) => set({ aptAttribution: data }),
+
+  // Node Selection
+  selectedNodeId: null,
+  selectNode: (id) => set({ selectedNodeId: id }),
+
+  // Node Patching (for WebSocket updates)
+  applyPatch: (nodeId, patch) => set((s) => {
+    const nodes = s.nodes.map((n) => {
+      const id = n.agent_id || n.id || n.node_id;
+      if (id === nodeId) return { ...n, ...patch };
+      return n;
+    });
+    return { nodes };
+  }),
+
   // Live Asset Isolation
   isolateAsset: (incidentId, assetId) => {
     set((state) => ({
@@ -161,3 +217,16 @@ export const useAppStore = create((set, get) => ({
 }));
 
 export const useStore = useAppStore;
+
+export function iconForEventType(type) {
+  if (!type) return 'info';
+  const t = type.toLowerCase();
+  if (t.includes('anomaly') || t.includes('detection') || t.includes('threat')) return 'detection';
+  if (t.includes('quarantine') || t.includes('isolate') || t.includes('fence')) return 'quarantine';
+  if (t.includes('antibody') || t.includes('immun') || t.includes('revaccin')) return 'antibody';
+  if (t.includes('broadcast') || t.includes('reset') || t.includes('network')) return 'broadcast';
+  if (t.includes('herd')) return 'herd';
+  if (t.includes('honeypot') || t.includes('decoy')) return 'honeypot';
+  if (t.includes('apt') || t.includes('attribution')) return 'apt';
+  return 'info';
+}
